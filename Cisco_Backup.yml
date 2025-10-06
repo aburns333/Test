@@ -6,7 +6,7 @@
 
   vars:
     backup_base_dir: "/etc/ansible/backups"
-    teams_webhook_url: "https://netquestcorp.webhook.office.com/webhookb2/e224595d-97ff-43c6-9461-5fc95663b7dc@eb57c596-1b7a-41c8-b35c-ac7429c2e4ca/IncomingWebhook/55b50917bbe840bda052486d45d5da31/59dfb530-f437-43f0-9701-369d656039f4/V2WikP0v_OF3wFg1v7qBQvsH7vfUP6hO9AF-tZqU1m2Oc1"  # Replace with your actual webhook
+    teams_webhook_url: "https://netquestcorp.webhook.office.com/webhookb2/e224595d-97ff-43c6-9461-5fc95663b7dc@eb57c596-1b7a-41c8-b35c-ac7429c2e4ca/IncomingWebhook/55b50917bbe840bda052486d45d5da31/59dfb530-f437-43f0-9701-369d656039f4/V2WikP0v_OF3wFg1v7qBQvsH7vfUP6hO9AF-tZqU1m2Oc1"
 
   tasks:
 
@@ -28,7 +28,7 @@
         mode: '0755'
 
     - name: Backup running config
-      ios_config:
+      cisco.ios.ios_config:
         backup: yes
         backup_options:
           filename: "{{ backup_filename }}"
@@ -36,19 +36,18 @@
       register: backup_result
       ignore_errors: yes
 
-    - name: Set Teams notification message
+    - name: Prepare Teams notification message
       set_fact:
-        teams_message: >-
-          {
-            "title": "{{ '✅ Backup Successful' if not backup_result.failed else '❌ Backup Failed' }}",
-            "text": "**Device:** {{ inventory_hostname }}\n
-                     **Time:** {{ backup_date }} {{ backup_time }} UTC\n
-                     {% if not backup_result.failed %}
-                     **Backup Path:** {{ backup_dir }}/{{ backup_filename }}
-                     {% else %}
-                     **Error:** {{ backup_result.msg | default('Unknown error') }}
-                     {% endif %}"
-          }
+        teams_message:
+          title: "{{ '✅ Backup Successful' if not backup_result.failed else '❌ Backup Failed' }}"
+          text: |
+            **Device:** {{ inventory_hostname }}
+            **Time:** {{ backup_date }} {{ backup_time }} UTC
+            {% if not backup_result.failed %}
+            **Backup Path:** {{ backup_dir }}/{{ backup_filename }}
+            {% else %}
+            **Error:** {{ backup_result.msg | default('Unknown error') }}
+            {% endif %}
 
     - name: Send Teams notification
       delegate_to: localhost
@@ -57,5 +56,5 @@
         method: POST
         headers:
           Content-Type: "application/json"
-        body: "{{ teams_message | from_yaml | to_json }}"
+        body: "{{ teams_message | to_json }}"
         body_format: json
