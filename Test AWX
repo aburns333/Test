@@ -1,0 +1,6 @@
+- name: Test AWX on Ubuntu VM
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ping the host
+      ansible.builtin.ping:
