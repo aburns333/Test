@@ -1,0 +1,86 @@
+---
+- name: Backup Palo Alto firewall configs
+  hosts: paloalto
+  gather_facts: no
+  collections:
+    - paloaltonetworks.panos
+
+  vars:
+    retention_days: 180
+    teams_webhook_url: "https://netquestcorp.webhook.office.com/webhookb2/e224595d-97ff-43c6-9461-5fc95663b7dc@eb57c596-1b7a-41c8-b35c-ac7429c2e4ca/IncomingWebhook/55b50917bbe840bda052486d45d5da31/59dfb530-f437-43f0-9701-369d656039f4/V2WikP0v_OF3wFg1v7qBQvsH7vfUP6hO9AF-tZqU1m2Oc1"
+
+    fw_name_map:
+      "10.4.5.2": "PA FW1"
+      "10.4.5.3": "PA FW2"
+
+  tasks:
+
+    - name: Set backup timestamp
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ '%Y-%m-%d_%H-%M-%S' | strftime }}"
+      delegate_to: localhost
+
+    - name: Create timestamped backup folder
+      ansible.builtin.file:
+        path: "{{ backup_dir }}/{{ backup_timestamp }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      register: backup_folder
+
+    - name: Export running config from Palo Alto
+      paloaltonetworks.panos.panos_export:
+        provider:
+          ip_address: "{{ inventory_hostname }}"
+          username: "{{ fw_username }}"
+          password: "{{ fw_password }}"
+        category: configuration
+        filename: "{{ backup_folder.path }}/backup-{{ inventory_hostname }}.xml"
+        create_directory: yes
+      delegate_to: localhost
+      register: export_result
+      ignore_errors: yes
+
+    - name: Send Teams notification on success
+      uri:
+        url: "{{ teams_webhook_url }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body: |
+          {
+            "text": "✅ Backup SUCCESS for {{ fw_name_map[inventory_hostname] }} ({{ inventory_hostname }}) at {{ backup_timestamp }}"
+          }
+        body_format: json
+      when: export_result is succeeded
+      delegate_to: localhost
+
+    - name: Send Teams notification on failure
+      uri:
+        url: "{{ teams_webhook_url }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body: |
+          {
+            "text": "❌ Backup FAILED for {{ fw_name_map[inventory_hostname] }} ({{ inventory_hostname }}) at {{ backup_timestamp }}"
+          }
+        body_format: json
+      when: export_result is failed
+      delegate_to: localhost
+
+    - name: Purge backups older than retention period
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}"
+        age: "{{ retention_days }}d"
+        recurse: yes
+      register: old_backups
+      delegate_to: localhost
+
+    - name: Remove old backups
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_backups.files }}"
+      when: old_backups.matched > 0
+      delegate_to: localhost
