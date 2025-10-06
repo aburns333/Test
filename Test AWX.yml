@@ -4,3 +4,7 @@
   tasks:
     - name: Ping the host
       ansible.builtin.ping:
+
+    - name: Check uptime
+      ansible.builtin.command:
+        cmd: uptime
