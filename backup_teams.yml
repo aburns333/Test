@@ -1,0 +1,87 @@
+---
+- name: Backup Cisco IOS Config and send one Teams summary
+  hosts: cisco
+  gather_facts: no
+  connection: network_cli
+
+  vars:
+    backup_base_dir: "/etc/ansible/backups"
+    teams_webhook_url: "https://netquestcorp.webhook.office.com/webhookb2/e224595d-97ff-43c6-9461-5fc95663b7dc@eb57c596-1b7a-41c8-b35c-ac7429c2e4ca/IncomingWebhook/41b2f66924b74015b45ba80b85c4889d/59dfb530-f437-43f0-9701-369d656039f4/V2tsI6EZDXeq5Igec9AN24ccwJq1q282dM0k_njUWsgAs1"
+
+  tasks:
+
+    - name: Set current date and time
+      set_fact:
+        backup_date: "{{ lookup('pipe','date +%Y-%m-%d') }}"
+        backup_time: "{{ lookup('pipe','date +%H-%M-%S') }}"
+
+    - name: Set full backup path and timestamped filename
+      set_fact:
+        backup_dir: "{{ backup_base_dir }}/{{ backup_date }}"
+        backup_filename: "{{ inventory_hostname }}-{{ backup_date }}_{{ backup_time }}.cfg"
+
+    - name: Ensure backup directory exists
+      delegate_to: localhost
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Backup running config
+      ios_config:
+        backup: yes
+        backup_options:
+          filename: "{{ backup_filename }}"
+          dir_path: "{{ backup_dir }}"
+      register: backup_result
+      ignore_errors: yes
+
+    - name: Append device result to summary
+      set_fact:
+        backup_summary: "{{ backup_summary | default([]) + [ { 'device': inventory_hostname,
+                                                              'status': (backup_result is succeeded) | ternary('✅ Success','❌ Failed'),
+                                                              'path': (backup_result is succeeded) | ternary(backup_dir + '/' + backup_filename,'N/A'),
+                                                              'error': (backup_result.failed) | ternary(backup_result.msg | default('Unknown error'),'') } ] }}"
+
+- name: Send Teams summary after all backups
+  hosts: localhost
+  gather_facts: no
+  vars:
+    backup_summary: "{{ hostvars | dict2items | selectattr('value.backup_summary','defined') | map(attribute='value.backup_summary') | sum(start=[]) }}"
+    teams_webhook_url: "https://netquestcorp.webhook.office.com/webhookb2/e224595d-97ff-43c6-9461-5fc95663b7dc@eb57c596-1b7a-41c8-b35c-ac7429c2e4ca/IncomingWebhook/41b2f66924b74015b45ba80b85c4889d/59dfb530-f437-43f0-9701-369d656039f4/V2tsI6EZDXeq5Igec9AN24ccwJq1q282dM0k_njUWsgAs1"
+
+  tasks:
+
+    - name: Determine overall backup status
+      set_fact:
+        overall_status: >-
+          {% if backup_summary | selectattr('status','equalto','❌ Failed') | list | length > 0 %}
+          ⚠️ Some backups failed
+          {% else %}
+          ✅ All backups successful
+          {% endif %}
+
+    - name: Build compact Teams message table
+      set_fact:
+        teams_message_text: |
+          **Cisco Backup Summary - {{ lookup('pipe', "date '+%Y-%m-%d %H:%M:%S'") }} UTC**  
+          **Overall Status:** {{ overall_status }}
+
+          | Device | Status | Backup Path / Error |
+          |--------|--------|-------------------|
+          {% for item in backup_summary %}
+          | {{ item.device }} | {{ item.status }} | {% if item.status == '✅ Success' %}{{ item.path }}{% else %}{{ item.error }}{% endif %} |
+          {% endfor %}
+
+    - name: Send Teams summary
+      uri:
+        url: "{{ teams_webhook_url }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body: |
+          {
+            "title": "Cisco Backup Summary",
+            "text": "{{ teams_message_text }}"
+          }
+        body_format: json
